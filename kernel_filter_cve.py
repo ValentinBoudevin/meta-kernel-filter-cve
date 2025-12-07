@@ -109,7 +109,7 @@ def nvd_get_cve(cve_id, api_key):
         headers["apiKey"] = api_key
 
     url = f"https://services.nvd.nist.gov/rest/json/cves/2.0?cveId={cve_id}"
-    
+
     try:
         r = requests.get(url, headers=headers, timeout=10)
         r.raise_for_status()
@@ -132,30 +132,57 @@ def nvd_get_cve(cve_id, api_key):
 
     return urls
 
+def kernel_filter_git_kernel_org(all_nvd_results):
+    """
+    Given a dict: { cve_id: [url1, url2, ...] }
+    return dict of only CVEs containing a git.kernel.org stable URL.
+    """
+    match = {}
+
+    for cve_id, urls in all_nvd_results.items():
+        for u in urls:
+            if u.startswith("https://git.kernel.org/stable/"):
+                match[cve_id] = urls
+                break
+
+    return match
+
 def main():
     args = get_parameters()
     unfixed = kernel_get_cves_unfixed(args.cve_check_input)
 
-    print("Unfixed Kernel CVEs:")
-    if not unfixed:
-        print("None")
-        return
+    print(f"\nFound {len(unfixed)} unpatched CVEs:\n")
 
     for entry in unfixed:
         print(f"- {entry['id']} (package: {entry['package']}, status: {entry['status']})")
 
     print("\nFetching NVD details...\n")
 
+    nvd_results = {} 
+
     for entry in unfixed:
         cve_id = entry["id"]
         print(f"{cve_id}:")
         urls = nvd_get_cve(cve_id, args.nvd_api_key)
-        if not urls:
+        if urls:
+            nvd_results[cve_id] = urls
+        else:
             print("  No URLs found.")
-            continue
         for u in urls:
             print(f"  - {u}")
         print()
+
+    print(f"\nSuccessfully retrieved NVD data for {len(nvd_results)} out of {len(unfixed)} CVEs.\n")
+
+    git_kernel_matches = kernel_filter_git_kernel_org(nvd_results)
+
+    print(f"CVEs containing git.kernel.org stable patches: {len(git_kernel_matches)}")
+
+    for cve_id, urls in git_kernel_matches.items():
+        print(f"\n{cve_id}:")
+        for u in urls:
+            if u.startswith("https://git.kernel.org/stable/"):
+                print(f"  - {u}")
 
 if __name__ == "__main__":
     main()
