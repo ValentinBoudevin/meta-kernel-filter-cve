@@ -375,13 +375,13 @@ def main():
     args = get_parameters()
     unfixed = kernel_get_cves_unfixed(args.cve_check_input)
 
-    print(f"Found {len(unfixed)} unpatched CVEs in cve-check file")
+    print(f"CVEs found unpatched CVEs in cve-check file: {len(unfixed)}")
 
     if args.verbose:
         for entry in unfixed:
             print(f"- {entry['id']} (package: {entry['package']}, status: {entry['status']})")
 
-    print(f"Fetching unpatched CVEs NVD details...")
+    print(f"Fetching unpatched CVEs NVD details... May take a while...")
 
     nvd_results = {} 
 
