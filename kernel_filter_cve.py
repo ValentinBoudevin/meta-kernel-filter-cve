@@ -7,6 +7,7 @@ import json
 import requests
 import subprocess
 import re
+import time
 
 GIT_KERNEL_ORG_PATH = os.getcwd() + "/linux"
 
@@ -106,39 +107,56 @@ def kernel_get_cves_unfixed(path):
 
     return unfixed
 
-def nvd_get_cve(cve_id, api_key):
+def nvd_get_cve(cve_id, api_key, max_retries=6, retry_wait=2):
     """
     Query NVD API for a CVE and return ONLY the reference URLs.
-    Uses authenticated request with API key.
+    Retries on HTTP 429 (rate limit).
     """
     headers = {
         "Content-Type": "application/json"
     }
-
     if api_key:
         headers["apiKey"] = api_key
 
     url = f"https://services.nvd.nist.gov/rest/json/cves/2.0?cveId={cve_id}"
 
+    for attempt in range(1, max_retries + 1):
+        try:
+            r = requests.get(url, headers=headers, timeout=10)
+            if r.status_code == 429:
+                if attempt < max_retries:
+                    print(f"429 Too Many Requests for {cve_id}. "
+                          f"Retrying {attempt}/{max_retries} in {retry_wait}s...")
+                    time.sleep(retry_wait)
+                    continue
+                else:
+                    print(f"ERROR: Max retries reached for {cve_id}. Skipping...")
+                    return []
+            r.raise_for_status()
+            break
+
+        except requests.HTTPError as e:
+            print(f"ERROR: Failed fetching NVD data for {cve_id}: {e}")
+            return []
+
+        except Exception as e:
+            print(f"ERROR: Unexpected failure fetching {cve_id}: {e}")
+            return []
+
     try:
-        r = requests.get(url, headers=headers, timeout=10)
-        r.raise_for_status()
-    except Exception as e:
-        print(f"ERROR: Failed fetching NVD data for {cve_id}: {e}")
+        data = r.json()
+    except ValueError:
+        print(f"ERROR: Failed to parse JSON for {cve_id}")
         return []
 
-    data = r.json()
     urls = []
     records = data.get("vulnerabilities", [])
 
     for entry in records:
-        cve = entry.get("cve", {})
-        refs = cve.get("references", [])
-
+        refs = entry.get("cve", {}).get("references", [])
         for ref in refs:
-            link = ref.get("url")
-            if link:
-                urls.append(link)
+            if ref.get("url"):
+                urls.append(ref["url"])
 
     return urls
 
@@ -424,6 +442,14 @@ def main():
     if args.verbose:
         for cve, cfgs in enabled_cves.items():
             print(f"  {cve}: {', '.join(cfgs)}")
+
+    try:
+        with open(args.cve_check_output, "w", encoding="utf-8") as out:
+            json.dump(enabled_cves, out, indent=4)
+        print(f"Wrote enabled CVEs to: {args.cve_check_output}")
+    except Exception as e:
+        print(f"ERROR: Failed to write output file {args.cve_check_output}: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
