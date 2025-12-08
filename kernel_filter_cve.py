@@ -6,6 +6,7 @@ import sys
 import json
 import requests
 import subprocess
+import re
 
 GIT_KERNEL_ORG_PATH = os.getcwd() + "/linux"
 
@@ -234,6 +235,71 @@ def kernel_get_modified_files(path, git_cve_results):
 
     return modified_files
 
+def _parse_makefile_objects(makefile_path):
+    """
+    Parse a kernel Makefile to map CONFIG_* → object files.
+    """
+    config_map = {}
+    pattern = re.compile(r'obj-\$\((CONFIG_[A-Z0-9_]+)\)\s*\+=\s*(.*\.o)')
+    try:
+        with open(makefile_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith('#') or not line:
+                    continue
+                match = pattern.match(line)
+                if match:
+                    config, objs = match.groups()
+                    objs_list = [o.strip() for o in objs.split()]
+                    config_map[config] = objs_list
+    except FileNotFoundError:
+        return {}
+    return config_map
+
+def _find_makefile_for_file(kernel_path,file_path):
+    """
+    Return the Makefile path in the same folder as the file.
+    """
+    full_path = os.path.join(kernel_path, file_path)
+    dir_path = os.path.dirname(full_path)
+    candidate = os.path.join(dir_path, "Makefile")
+    if os.path.isfile(candidate):
+        return candidate
+    return None
+    
+def kernel_find_defconfig_arguments(kernel_path, modified_files_results):
+    """
+    Given a dict { cve_id: [file1, file2, ...] } and the kernel path,
+    find the CONFIG_* defconfig option controlling each modified file.
+    
+    Returns a dict:
+    {
+        cve_id: {
+            file1: CONFIG_XXX,
+            file2: CONFIG_YYY,
+            ...
+        }
+    }
+    """
+    result = {}
+    for cve_id, files in modified_files_results.items():
+        result[cve_id] = {}
+        for f in files:
+            makefile = _find_makefile_for_file(kernel_path,f)
+            if not makefile:
+                result[cve_id][f] = None
+                continue
+
+            config_map = _parse_makefile_objects(makefile)
+            basename = os.path.basename(f).replace(".c", ".o")
+            found = None
+            for config, objs in config_map.items():
+                if basename in objs:
+                    found = config
+                    break
+            result[cve_id][f] = found
+    return result
+
 def main():
     args = get_parameters()
     unfixed = kernel_get_cves_unfixed(args.cve_check_input)
@@ -258,7 +324,7 @@ def main():
             if args.verbose:
                 for u in urls:
                     print(f"  - {u}")
-                    print()
+                print()
         elif args.verbose:
             print("  No URLs found.")
             print()
@@ -288,5 +354,15 @@ def main():
 
     print(f"CVEs with available patched files references: {len(modified_files_results)}")
     
+    defconfigs = kernel_find_defconfig_arguments(args.kernel_path, modified_files_results)
+
+    if args.verbose:
+        for cve_id, files_configs in defconfigs.items():
+            print(f"\n{cve_id} CONFIG mappings:")
+            for f, cfg in files_configs.items():
+                print(f"  {f} -> {cfg}")
+                
+    print(f"CVEs with defconfig arguments found: {len(modified_files_results)}")
+
 if __name__ == "__main__":
     main()
