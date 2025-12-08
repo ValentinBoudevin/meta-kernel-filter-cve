@@ -302,6 +302,57 @@ def kernel_find_defconfig_arguments(kernel_path, modified_files_results):
                 result[cve_id][f] = None
     return result
 
+def kernel_defconfig_comparaison(kernel_path, defconfig_affected):
+    """
+    Compare the kernel .config file with the defconfig_affected mapping:
+        {
+            cve_id: {
+                file1: CONFIG_X,
+                file2: CONFIG_Y,
+                ...
+            }
+        }
+    Returns:
+        {
+            cve_id: [CONFIG_X, CONFIG_Z]
+        }
+
+    Only returns CVEs where at least one CONFIG_* is enabled in .config.
+    """
+    config_file = os.path.join(kernel_path, ".config")
+    if not os.path.isfile(config_file):
+        print(f"ERROR: Missing .config at {config_file}")
+        return {}
+    configs_to_find = {
+        cfg
+        for cve_map in defconfig_affected.values()
+        for cfg in cve_map.values()
+        if cfg
+    }
+    if not configs_to_find:
+        return {}
+    pattern = re.compile(
+        r'^(' + "|".join(re.escape(cfg) for cfg in configs_to_find) + r')=(y|m|1)'
+    )
+    enabled = set()
+
+    with open(config_file, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            m = pattern.match(line)
+            if m:
+                enabled.add(m.group(1))
+    result = {}
+
+    for cve_id, file_cfg_map in defconfig_affected.items():
+        enabled_cfgs = list({cfg for cfg in file_cfg_map.values() if cfg in enabled})
+
+        if enabled_cfgs:
+            result[cve_id] = enabled_cfgs
+
+
+    return result
+
 def main():
     args = get_parameters()
     unfixed = kernel_get_cves_unfixed(args.cve_check_input)
@@ -365,6 +416,14 @@ def main():
                 print(f"  {f} -> {cfg}")
                 
     print(f"CVEs with defconfig arguments found: {len(modified_files_results)}")
+    
+    enabled_cves = kernel_defconfig_comparaison(args.kernel_path, defconfigs)
+
+    print(f"CVEs which affects the kernel once filtered: {len(enabled_cves)}")
+    
+    if args.verbose:
+        for cve, cfgs in enabled_cves.items():
+            print(f"  {cve}: {', '.join(cfgs)}")
 
 if __name__ == "__main__":
     main()
