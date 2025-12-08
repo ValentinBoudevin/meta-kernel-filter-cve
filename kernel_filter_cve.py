@@ -5,6 +5,9 @@ import os
 import sys
 import json
 import requests
+import subprocess
+
+GIT_KERNEL_ORG_PATH = os.getcwd() + "/linux"
 
 def get_parameters():
     parser = argparse.ArgumentParser(
@@ -33,6 +36,12 @@ def get_parameters():
         "--nvd-api-key",
         required=True,
         help="NVD API key used for authenticated requests"
+    )
+    
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="If present, print details of each unfixed CVE"
     )
 
     args = parser.parse_args()
@@ -147,42 +156,137 @@ def kernel_filter_git_kernel_org(all_nvd_results):
 
     return match
 
+def kernel_clone_git_kernel_org(path):
+    """
+    Clone the Linux stable repository from kernel.org if it doesn't exist,
+    or update it if it already exists.
+    """
+    repo_url = "https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git"
+    branch = "master"
+
+    if not os.path.exists(path):
+        print(f"Cloning Linux stable repo into {path}...")
+        try:
+            subprocess.run(
+                ["git", "clone", "--branch", branch, repo_url, path],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            print("Clone completed.")
+        except subprocess.CalledProcessError as e:
+            print(f"ERROR: Failed to clone repo: {e.stderr.strip()}")
+    else:
+        print(f"Linux stable repo already exists at {path}, updating...")
+        try:
+            subprocess.run(
+                ["git", "-C", path, "fetch", "--all"],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            subprocess.run(
+                ["git", "-C", path, "reset", "--hard", f"origin/{branch}"],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            print("Update completed.")
+        except subprocess.CalledProcessError as e:
+            print(f"ERROR: Failed to update repo: {e.stderr.strip()}")
+
+def kernel_get_modified_files(path, git_cve_results):
+    """
+    Given { cve_id: [url1, url2, ...] } for URLs pointing to git.kernel.org,
+    return { cve_id: [file1, file2, ...] } representing files modified by the commits.
+    Skip CVE entirely if any commit SHA fails.
+    """
+    modified_files = {}
+
+    for cve_id, urls in git_cve_results.items():
+        files_for_cve = set()
+        failed = False
+
+        for url in urls:
+            if url.startswith("https://git.kernel.org/stable/c/"):
+                commit_sha = url.rstrip("/").split("/")[-1]
+                try:
+                    result = subprocess.run(
+                        ["git", "-C", path, "show", "--name-only", "--pretty=", commit_sha],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        check=True
+                    )
+                    for f in result.stdout.splitlines():
+                        f = f.strip()
+                        if f:
+                            files_for_cve.add(f)
+                except subprocess.CalledProcessError as e:
+                    print(f"ERROR: Failed to get files for commit {commit_sha} ({cve_id}): {e.stderr.strip()}")
+                    failed = True
+                    break
+        if not failed and files_for_cve:
+            modified_files[cve_id] = sorted(files_for_cve)
+
+    return modified_files
+
 def main():
     args = get_parameters()
     unfixed = kernel_get_cves_unfixed(args.cve_check_input)
 
-    print(f"\nFound {len(unfixed)} unpatched CVEs:\n")
+    print(f"Found {len(unfixed)} unpatched CVEs in cve-check file")
 
-    for entry in unfixed:
-        print(f"- {entry['id']} (package: {entry['package']}, status: {entry['status']})")
+    if args.verbose:
+        for entry in unfixed:
+            print(f"- {entry['id']} (package: {entry['package']}, status: {entry['status']})")
 
-    print("\nFetching NVD details...\n")
+    print(f"Fetching unpatched CVEs NVD details...")
 
     nvd_results = {} 
 
     for entry in unfixed:
         cve_id = entry["id"]
-        print(f"{cve_id}:")
-        urls = nvd_get_cve(cve_id, args.nvd_api_key)
+        urls = nvd_get_cve(cve_id, args.nvd_api_key) 
+        if args.verbose:
+            print(f"{cve_id}:")
         if urls:
             nvd_results[cve_id] = urls
-        else:
+            if args.verbose:
+                for u in urls:
+                    print(f"  - {u}")
+                    print()
+        elif args.verbose:
             print("  No URLs found.")
-        for u in urls:
-            print(f"  - {u}")
-        print()
+            print()
 
-    print(f"\nSuccessfully retrieved NVD data for {len(nvd_results)} out of {len(unfixed)} CVEs.\n")
-
+    print(f"Successfully retrieved NVD data for {len(nvd_results)} out of {len(unfixed)} CVEs.")
+    
     git_kernel_matches = kernel_filter_git_kernel_org(nvd_results)
-
+    
     print(f"CVEs containing git.kernel.org stable patches: {len(git_kernel_matches)}")
+    
+    if args.verbose:
+        for cve_id, urls in git_kernel_matches.items():
+            print(f"\n{cve_id}:")
+            for u in urls:
+                if u.startswith("https://git.kernel.org/stable/"):
+                    print(f"  - {u}")
+                    
+    kernel_clone_git_kernel_org(GIT_KERNEL_ORG_PATH)
 
-    for cve_id, urls in git_kernel_matches.items():
-        print(f"\n{cve_id}:")
-        for u in urls:
-            if u.startswith("https://git.kernel.org/stable/"):
-                print(f"  - {u}")
+    modified_files_results = kernel_get_modified_files(GIT_KERNEL_ORG_PATH, git_kernel_matches)
 
+    if args.verbose:
+        for cve_id, files in modified_files_results.items():
+            print(f"\n{cve_id} modified files:")
+            for f in files:
+                print(f"  - {f}")
+
+    print(f"CVEs with available patched files references: {len(modified_files_results)}")
+    
 if __name__ == "__main__":
     main()
