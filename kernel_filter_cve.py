@@ -10,10 +10,6 @@ import re
 import time
 from typing import Dict, List, Optional
 
-GIT_KERNEL_ORG_PATH = os.path.join(os.getcwd(), "linux")
-NVD_CACHE_PATH = os.path.join(os.getcwd(), "nvd_cache.json")
-OUTPUT_FILES_NAME = "demo"
-
 def get_parameters() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Kernel CVE filter tool"
@@ -48,7 +44,25 @@ def get_parameters() -> argparse.Namespace:
         required=True,
         help="Path to a defconfig file used to generate a temporary .config"
     )
-    
+
+    parser.add_argument(
+        "--output-files-name",
+        required=True,
+        help="Base name for generated output files (default: demo)"
+    )
+
+    parser.add_argument(
+        "--git-kernel-org-path",
+        default=os.path.join(os.getcwd(), "linux"),
+        help="Path where the linux-stable git repository is cloned (default: ./linux)"
+    )
+
+    parser.add_argument(
+        "--nvd-cache-path",
+        default=os.path.join(os.getcwd(), "nvd_cache.json"),
+        help="Path to the NVD cache JSON file (default: ./nvd_cache.json)"
+    )
+
     parser.add_argument(
         "--verbose",
         action="store_true",
@@ -120,7 +134,7 @@ def kernel_get_cves_unfixed(path: str) -> List[Dict[str, Optional[str]]]:
 
     return unfixed
 
-def nvd_get_cve(cve_id: str, api_key: str, max_retries: int = 5, retry_wait: int = 1) -> List[str]:
+def nvd_get_cve(cve_id: str, api_key: str, nvd_cache_path: str,max_retries: int = 5, retry_wait: int = 1) -> List[str]:
     """
     Query NVD API for a CVE and return ONLY the reference URLs.
     Retries on HTTP 429 (rate limit).
@@ -128,8 +142,8 @@ def nvd_get_cve(cve_id: str, api_key: str, max_retries: int = 5, retry_wait: int
     Only stores CVEs in cache if they contain a git.kernel.org stable URL.
     """
     try:
-        if os.path.exists(NVD_CACHE_PATH):
-            with open(NVD_CACHE_PATH, "r", encoding="utf-8") as f:
+        if os.path.exists(nvd_cache_path):
+            with open(nvd_cache_path, "r", encoding="utf-8") as f:
                 cache = json.load(f)
         else:
             cache = {}
@@ -173,7 +187,7 @@ def nvd_get_cve(cve_id: str, api_key: str, max_retries: int = 5, retry_wait: int
     if any(u.startswith("https://git.kernel.org/stable/") for u in urls):
         cache[cve_id] = urls
         try:
-            with open(NVD_CACHE_PATH, "w", encoding="utf-8") as f:
+            with open(nvd_cache_path, "w", encoding="utf-8") as f:
                 json.dump(cache, f, indent=2)
         except Exception:
             print("WARNING: Cache write failed.")
@@ -451,7 +465,7 @@ def main() -> None:
 
     for entry in unfixed:
         cve_id = entry["id"]
-        urls = nvd_get_cve(cve_id, args.nvd_api_key) 
+        urls = nvd_get_cve(cve_id, args.nvd_api_key, args.nvd_cache_path) 
         if args.verbose:
             print(f"{cve_id}:")
         if urls:
@@ -477,9 +491,9 @@ def main() -> None:
                 if u.startswith("https://git.kernel.org/stable/"):
                     print(f"  - {u}")
                     
-    kernel_clone_git_kernel_org(GIT_KERNEL_ORG_PATH)
+    kernel_clone_git_kernel_org(args.git_kernel_org_path)
 
-    modified_files_results = kernel_get_modified_files(GIT_KERNEL_ORG_PATH, git_kernel_matches)
+    modified_files_results = kernel_get_modified_files(args.git_kernel_org_path, git_kernel_matches)
 
     if args.verbose:
         for cve_id, files in modified_files_results.items():
@@ -508,7 +522,7 @@ def main() -> None:
             print(f"  {cve}: {', '.join(cfgs)}")
 
     os.makedirs(args.output_path, exist_ok=True)
-    enabled_cves_filename = f"{OUTPUT_FILES_NAME}.kernel_remaining_cves.json"
+    enabled_cves_filename = f"{args.output_files_name}.kernel_remaining_cves.json"
     enabled_cves_path = os.path.join(args.output_path, enabled_cves_filename)
 
     try:
@@ -519,7 +533,7 @@ def main() -> None:
         print(f"ERROR: Failed to write output file {enabled_cves_path}: {e}")
         sys.exit(1)
 
-    filtered_rootfs_filename = f"{OUTPUT_FILES_NAME}.rootfs.kernel_filtered.json"
+    filtered_rootfs_filename = f"{args.output_files_name}.rootfs.kernel_filtered.json"
     filtered_rootfs_path = os.path.join(args.output_path, filtered_rootfs_filename)
     generate_kernel_filtered_cve_check(args.cve_check_input, enabled_cves, filtered_rootfs_path)
 
