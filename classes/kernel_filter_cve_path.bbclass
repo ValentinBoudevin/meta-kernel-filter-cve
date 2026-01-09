@@ -1,0 +1,1 @@
+KERNEL_FILTER_CVE_PATH="${TMPDIR}/work/${MULTIMACH_TARGET_SYS}/kernel-filter-cve"

@@ -1,0 +1,1 @@
+inherit kernel_save_defconfig
