@@ -533,7 +533,7 @@ def main() -> None:
         print(f"ERROR: Failed to write output file {enabled_cves_path}: {e}")
         sys.exit(1)
 
-    filtered_rootfs_filename = f"{args.output_files_name}.rootfs.kernel_filtered.json"
+    filtered_rootfs_filename = f"{args.output_files_name}.kernel_filtered.json"
     filtered_rootfs_path = os.path.join(args.output_path, filtered_rootfs_filename)
     generate_kernel_filtered_cve_check(args.cve_check_input, enabled_cves, filtered_rootfs_path)
 

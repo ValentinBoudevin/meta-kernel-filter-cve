@@ -1,5 +1,7 @@
 inherit kernel_filter_cve_path
 
+DEPENDS += "python3-requests-native"
+
 python do_clean:append() {
     import os, glob
     deploy_dir = d.expand('${DEPLOY_DIR_IMAGE}')
@@ -76,14 +78,20 @@ do_kernel_filter_cve() {
         --nvd-cache-path "${KERNEL_FILTER_CVE_PATH}/nvd_cache.json" \
         --kernel-path "${STAGING_KERNEL_DIR}" \
         --config-path "${kernel_filter_cve_config_file}"
+    ret=$?
 
+    if [ $ret -ne 0 ]; then
+        bbfatal "Kernel CVE filtering failed (exit code $ret):\n${output}"
+    fi
+
+    bbplain "Kernel CVE filtering completed successfully"
     bbplain "New cve-check generated report with kernel cves filtered: ${new_cve_report_file}"
 
     #Create a symlink as every other JSON file in tmp/deploy/images
     ln -sf ${DEPLOY_DIR_IMAGE}/${IMAGE_NAME}.kernel_remaining_cves_map.json ${DEPLOY_DIR_IMAGE}/${IMAGE_BASENAME}${IMAGE_MACHINE_SUFFIX}${IMAGE_NAME_SUFFIX}.kernel_remaining_cves_map.json
     ln -sf ${DEPLOY_DIR_IMAGE}/${IMAGE_NAME}.kernel_filtered.json ${DEPLOY_DIR_IMAGE}/${IMAGE_BASENAME}${IMAGE_MACHINE_SUFFIX}${IMAGE_NAME_SUFFIX}.kernel_filtered.json
 }
+do_kernel_filter_cve[network] = "1"
 do_kernel_filter_cve[nostamp] = "1"
 do_kernel_filter_cve[doc] = "Run kernel filtering on the specified CVE"
-addtask kernel_filter_cve
-#addtask kernel_filter_cve after do_image_complete
+addtask kernel_filter_cve after do_image_complete
